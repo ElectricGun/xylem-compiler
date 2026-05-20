@@ -19,42 +19,9 @@ import static mily.processing.Validation.*;
 public class CodeGeneration {
 
     public static final String POINTER_VARIABLE = "mem_pointer";
-    private static Map<Class<? extends EvaluatorNode>, ScopeFunctionConsumer<ScopeNode, IRScopeConfig, IRFunction, Integer>> map = new HashMap<>();
-
-    public static IRCode generateIRCode(EvaluatorTree evaluatorTree, boolean generateComments, boolean debugMode) throws Exception {
-        IRScopeConfig irScopeConfig = new IRScopeConfig(
-                new IRCode(),
-                new HashMap<>(),
-                new HashMap<>(),
-                new HashMap<>(),
-                new HashCodeSimplifier(),
-                generateComments,
-                debugMode
-        );
-
-        irScopeConfig.irCode().addSingleLineBlock(new SetLine(POINTER_VARIABLE, "0", 0));
-
-        generateIRScopeRecursive(irScopeConfig.copy(), evaluatorTree.mainBlock, null, 0);
-
-        irScopeConfig.irCode().addSingleLineBlock(new Stop(0));
-        return irScopeConfig.irCode();
-    }
-
-    // the IRFunction here should be a part of scopeNode
-    private static void generateIrScopeRecursiveMapped(ScopeNode scopeNode, IRScopeConfig config, IRFunction function, int depth) throws Exception {
-        for (int i = 0; i < scopeNode.memberCount(); i++) {
-            EvaluatorNode member = scopeNode.getMember(i);
-
-            if (map.containsKey(member.getClass())) {
-                map.get(member.getClass()).apply(scopeNode, config, function, depth);
-            }
-        }
-    }
-
-    private static void generateIRScopeRecursive(IRScopeConfig irScopeConfig, ScopeNode scopeNode, /*for function scopes*/IRFunction function, int depth) throws Exception {
-        for (int i = 0; i < scopeNode.memberCount(); i++) {
-            EvaluatorNode member = scopeNode.getMember(i);
-
+    private static Map<Class<? extends EvaluatorNode>, ScopeFunctionConsumer<EvaluatorNode, ScopeNode, IRScopeConfig, IRFunction, Integer>> map = new HashMap<>();
+    static {
+        map.put(CallerNode.class, (member, scopeNode,irScopeConfig, function, depth) -> {
             if (member instanceof CallerNode fnCall) {
                 CallableSignature sig = fnCall.signature();
                 CallableNode callable = irScopeConfig.callableNodeMap().get(sig);
@@ -65,8 +32,11 @@ public class CodeGeneration {
                 } else if (callable instanceof RawTemplateDeclareNode) {
                     generateRawTemplateInvoke(irScopeConfig, fnCall, null, depth);
                 }
+            }
+        });
 
-            } else if (member instanceof OperationNode operationNode) {
+        map.put(OperationNode.class, (member, scopeNode,irScopeConfig, function, depth) -> {
+            if (member instanceof OperationNode operationNode) {
                 if (operationNode.isReturnOperation()) {
                     if (function == null)
                         throw new Exception("Return operation found outside a function at line " + operationNode.nameToken.line);
@@ -76,10 +46,17 @@ public class CodeGeneration {
                     }
                     irScopeConfig.irCode().addSingleLineBlock(new SetLine("@counter", function.getCallbackVar(), depth));
                 }
-            } else if (member instanceof FunctionDeclareNode fn) {
-                generateFunctionDeclare(fn, irScopeConfig, depth);
+            }
+        });
 
-            } else if (member instanceof DeclarationNode declarationNode) {
+        map.put(FunctionDeclareNode.class, (member, scopeNode, irScopeConfig, function, depth) -> {
+            if (member instanceof FunctionDeclareNode fn) {
+                generateFunctionDeclare(fn, irScopeConfig, depth);
+            }
+        });
+
+        map.put(DeclarationNode.class, (member, scopeNode,irScopeConfig, function, depth) -> {
+            if (member instanceof DeclarationNode declarationNode) {
                 irScopeConfig.declarationMap().put(declarationNode.getName(), declarationNode);
 
                 if (declarationNode.memberCount() > 0 && declarationNode.getMember(0) instanceof OperationNode op) {
@@ -119,7 +96,11 @@ public class CodeGeneration {
                 } else {
                     throw new Exception("Malformed declaration node found on codegen stage");
                 }
-            } else if (member instanceof AssignmentNode as) {
+            }
+        });
+
+        map.put(AssignmentNode.class, (member, scopeNode, irScopeConfig, function, depth) -> {
+            if (member instanceof AssignmentNode as) {
                 // first member of assignment nodes should always be an operator
                 // otherwise throw an error
                 if (member.memberCount() <= 0 || !(member.getMember(0) instanceof OperationNode op))
@@ -146,11 +127,17 @@ public class CodeGeneration {
                         }
                     }
                 }
+            }
+        });
 
-            } else if (member instanceof IfStatementNode ifs) {
+        map.put(IfStatementNode.class, (member, scopeNode,irScopeConfig, function, depth) -> {
+            if (member instanceof IfStatementNode ifs) {
                 generateBranchStatement(ifs, irScopeConfig, function, depth);
+            }
+        });
 
-            } else if (member instanceof WhileLoopNode whileLoop) {
+        map.put(WhileLoopNode.class, (member, scopeNode, irScopeConfig, function, depth) -> {
+            if (member instanceof WhileLoopNode whileLoop) {
                 // todo unify copy pastes
                 String whileHashCode = "" + irScopeConfig.hashCodeSimplifier().simplifyHash(whileLoop.hashCode());
                 String startLabelString = "while_loop_start_" + whileHashCode;
@@ -177,7 +164,7 @@ public class CodeGeneration {
                 irScopeConfig.irCode().addSingleLineBlock(jump);
 
                 // code block
-                generateIRScopeRecursive(irScopeConfig.copy(), whileLoop.getScope(), function, depth + 1);
+                generateScopeRecursive(whileLoop.getScope(), irScopeConfig.copy(), function, depth + 1);
 
                 // always jump
                 irScopeConfig.irCode().addSingleLineBlock(new Jump("always", startLabelString, depth));
@@ -185,7 +172,11 @@ public class CodeGeneration {
                 // loop end label
                 irScopeConfig.irCode().addSingleLineBlock(new Label(endLabelString, depth));
 
-            } else if (member instanceof ForLoopNode forLoop) {
+            }
+        });
+
+        map.put(ForLoopNode.class, (member, scopeNode, irScopeConfig, function, depth) -> {
+            if (member instanceof ForLoopNode forLoop) {
                 // todo unify copy pastes
                 String forLoopHashCode = "" + irScopeConfig.hashCodeSimplifier().simplifyHash(forLoop.hashCode());
                 String startLabelString = "for_loop_start_" + forLoopHashCode;
@@ -219,7 +210,7 @@ public class CodeGeneration {
                 irScopeConfig.irCode().addSingleLineBlock(jump);
 
                 // code block
-                generateIRScopeRecursive(irScopeConfig.copy(), forLoop.getScope(), function, depth + 1);
+                generateScopeRecursive(forLoop.getScope(), irScopeConfig.copy(), function, depth + 1);
 
                 // updater
                 AssignmentNode updater = forLoop.getUpdater();
@@ -233,9 +224,42 @@ public class CodeGeneration {
 
                 // loop end label
                 irScopeConfig.irCode().addSingleLineBlock(new Label(endLabelString, depth));
+            }
+        });
 
-            } else if (member instanceof RawTemplateDeclareNode rawTemplateDeclareNode) {
+        map.put(RawTemplateDeclareNode.class, (member, scopeNode,irScopeConfig, function, depth) -> {
+            if (member instanceof RawTemplateDeclareNode rawTemplateDeclareNode) {
                 irScopeConfig.callableNodeMap().put(rawTemplateDeclareNode.signature(), rawTemplateDeclareNode);
+            }
+        });
+    }
+
+    public static IRCode generateIRCode(EvaluatorTree evaluatorTree, boolean generateComments, boolean debugMode) throws Exception {
+        IRScopeConfig irScopeConfig = new IRScopeConfig(
+                new IRCode(),
+                new HashMap<>(),
+                new HashMap<>(),
+                new HashMap<>(),
+                new HashCodeSimplifier(),
+                generateComments,
+                debugMode
+        );
+
+        irScopeConfig.irCode().addSingleLineBlock(new SetLine(POINTER_VARIABLE, "0", 0));
+
+        generateScopeRecursive(evaluatorTree.mainBlock, irScopeConfig.copy(), null, 0);
+
+        irScopeConfig.irCode().addSingleLineBlock(new Stop(0));
+        return irScopeConfig.irCode();
+    }
+
+    // the IRFunction here should be a part of scopeNode
+    private static void generateScopeRecursive(ScopeNode scopeNode, IRScopeConfig config, IRFunction function, int depth) throws Exception {
+        for (int i = 0; i < scopeNode.memberCount(); i++) {
+            EvaluatorNode member = scopeNode.getMember(i);
+
+            if (map.containsKey(member.getClass())) {
+                map.get(member.getClass()).apply(member, scopeNode, config, function, depth);
             }
         }
     }
@@ -326,7 +350,7 @@ public class CodeGeneration {
         irScopeConfig.irCode().addSingleLineBlock((new Jump("always", endJumpLabel, depth)));
         irScopeConfig.irCode().addSingleLineBlock(new Label(startJumpLabel, depth));
 
-        generateIRScopeRecursive(irScopeConfig.copy(), fn.getScope(), irFunction, depth + 1);
+        generateScopeRecursive(fn.getScope(), irScopeConfig.copy(), irFunction, depth + 1);
 
         irScopeConfig.irCode().addSingleLineBlock((new Label(endJumpLabel, depth)));
     }
@@ -360,7 +384,7 @@ public class CodeGeneration {
 
             startJumpBlock.addLine(startJump);
             irScopeConfig.irCode().irBlocks.add(startJumpBlock);
-            generateIRScopeRecursive(irScopeConfig.copy(), ifs.getScope(), function, depth + 1);
+            generateScopeRecursive(ifs.getScope(), irScopeConfig.copy(), function, depth + 1);
 
             // if there is an else node, then there must be an always jump to the end
             if (ifs.getElseNode() != null) {
@@ -379,7 +403,7 @@ public class CodeGeneration {
 
                 } else {
                     // if it is just an else
-                    generateIRScopeRecursive(irScopeConfig.copy(), elseNode.getScope(), function, depth + 1);
+                    generateScopeRecursive(elseNode.getScope(), irScopeConfig.copy(), function, depth + 1);
                     irScopeConfig.irCode().addSingleLineBlock(new Label(branchEndLabel, depth));
                     break;
                 }
@@ -506,7 +530,7 @@ public class CodeGeneration {
         }
     }
 
-    protected interface ScopeFunctionConsumer<X, Y, Z, W> {
-        void apply(X scope, Y config, Z function, W depth);
+    protected interface ScopeFunctionConsumer<M, X, Y, Z, W> {
+        void apply(M member, X scope, Y config, Z function, W depth) throws Exception;
     }
 }

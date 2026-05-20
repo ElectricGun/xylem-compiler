@@ -41,3 +41,6 @@ Bug fixes:
 # v0.1.4-alpha (contributed by @BnDLett)
 - Updated the standard library. [Changelog](std/CHANGELOG.md#v010-contributed-by-bndlett)
 - Added a [new test](tests/radar.mily)
+
+# v0.1.5-alpha
+- Refactored scope generation
